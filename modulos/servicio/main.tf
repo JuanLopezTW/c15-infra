@@ -13,6 +13,14 @@ resource "azurerm_container_app" "app" {
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
+  dynamic "identity" {
+    for_each = var.identidad_id == null ? [] : [1]
+    content {
+      type         = "UserAssigned"
+      identity_ids = [var.identidad_id]
+    }
+  }
+
   dynamic "secret" {
     for_each = local.secretos
     content {

@@ -123,8 +123,11 @@ module "social" {
   cpu_objetivo = local.escala.social.cpu
   jvm          = true
   tags         = local.tags
+  identidad_id = azurerm_user_assigned_identity.social.id # lee los logs centralizados para el admin
   entorno = merge(local.entorno_comun, local.base_de.social, {
-    SALAS_URL = "http://${module.salas.nombre}" # el chat del lobby le pregunta a salas
+    SALAS_URL               = "http://${module.salas.nombre}" # el chat del lobby le pregunta a salas
+    LOG_ANALYTICS_WORKSPACE = azurerm_log_analytics_workspace.c15.workspace_id
+    AZURE_CLIENT_ID         = azurerm_user_assigned_identity.social.client_id # que identidad usar al pedir el token
   })
   secretos = merge(local.secretos_comunes, { DB_PASSWORD = random_password.bd["social"].result })
 }
@@ -149,4 +152,19 @@ module "gateway" {
     SOCIAL_URL    = "http://${module.social.nombre}"
     CORS_ORIGENES = var.cors_origenes
   }
+}
+
+# El admin (en social) consulta los logs de todos los servicios con esta identidad, sin claves guardadas:
+# solo lectura y solo sobre ese workspace
+resource "azurerm_user_assigned_identity" "social" {
+  name                = "c15-social-identidad"
+  location            = var.region
+  resource_group_name = data.azurerm_resource_group.c15.name
+  tags                = local.tags
+}
+
+resource "azurerm_role_assignment" "social_lee_logs" {
+  scope                = azurerm_log_analytics_workspace.c15.id
+  role_definition_name = "Log Analytics Reader"
+  principal_id         = azurerm_user_assigned_identity.social.principal_id
 }

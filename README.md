@@ -13,6 +13,14 @@ Infraestructura de EscapeRoom C15 (microservicios) en Azure, con Terraform.
 
 Todo va en **North Central US**, junto al Postgres `escaperoomserverbd`. Solo el gateway es público; los demás se ven entre ellos por nombre dentro del entorno.
 
+## Tableros (O2)
+
+Dos Azure Workbooks en el portal (`Escape_Room_RG` -> Workbooks, o Monitor -> Workbooks), con selector de periodo:
+- **C15 - Tablero de negocio:** jugadores activos, sesiones, jugadores nuevos, salas, partidas jugadas, acertijos, retos, mensajes de chat, acciones en tiempo real, duracion promedio de una partida, funcionalidades mas usadas y actividad en el tiempo.
+- **C15 - Tablero tecnico:** peticiones, tiempo de respuesta promedio y p95, % de errores, usuarios concurrentes, estado por replica (DEGRADADA: p95 > 300 ms o errores > 2 %; SIN SENAL: 2 min sin logs), p95 y errores por servicio en el tiempo, y CPU, memoria y replicas de cada servicio (metricas de Azure).
+
+Lo de los logs esta consolidado entre replicas (una partida cuenta una vez). Las consultas son `tableros.tf`.
+
 ## Lo que no hace Terraform
 
 - **La versión que corre cada servicio:** la cambia el pipeline de su repo. Terraform crea la app con `:latest` la primera vez y después ignora la imagen.

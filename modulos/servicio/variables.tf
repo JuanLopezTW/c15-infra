@@ -83,6 +83,12 @@ variable "secretos" {
   sensitive   = true
 }
 
+variable "identidad_id" {
+  description = "Id de una identidad administrada (para llamar servicios de Azure sin claves guardadas). null: sin identidad"
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   type    = map(string)
   default = {}
