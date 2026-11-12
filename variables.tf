@@ -34,6 +34,12 @@ variable "replicas" {
   }
 }
 
+variable "kafka_administrado" {
+  description = "true: Event Hubs (requiere Microsoft.EventHub registrado en la suscripcion). false: Kafka en un contenedor interno"
+  type        = bool
+  default     = false
+}
+
 variable "cors_origenes" {
   description = "Origenes que el gateway deja llamar a la API (el front en Azure Static Web Apps)"
   type        = string

@@ -2,12 +2,9 @@
 # de cada repo (por eso el modulo ignora los cambios de imagen).
 
 locals {
-  kafka = "${azurerm_eventhub_namespace.c15.name}.servicebus.windows.net:9093"
-
-  # Lo que comparten broker, salas, gameplay y social (igual que el compose, pero con Event Hubs)
-  entorno_comun = {
-    EVENTOS_KAFKA      = "true"
-    KAFKA_SERVIDORES   = local.kafka
+  # Conexion a Kafka segun el interruptor kafka_administrado (variables.tf)
+  kafka_event_hubs = tomap({
+    KAFKA_SERVIDORES   = "${try(azurerm_eventhub_namespace.c15[0].name, "")}.servicebus.windows.net:9093"
     KAFKA_CREAR_TOPICS = "false" # los crea Terraform (eventos.tf)
     # Conexion a Event Hubs con la API de Kafka (Spring Boot las lee como spring.kafka.properties.*)
     SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL = "SASL_SSL"
@@ -16,21 +13,36 @@ locals {
     SPRING_KAFKA_PROPERTIES_METADATA_MAX_AGE_MS         = "180000"
     SPRING_KAFKA_PROPERTIES_CONNECTIONS_MAX_IDLE_MS     = "180000"
     SPRING_KAFKA_PRODUCER_PROPERTIES_ENABLE_IDEMPOTENCE = "false"
+  })
+  kafka_contenedor = tomap({
+    KAFKA_SERVIDORES   = "${try(module.kafka[0].nombre, "")}:9092"
+    KAFKA_CREAR_TOPICS = "true" # igual que en local: los crea cada servicio al arrancar
+  })
 
-    STOMP_RELAY   = "true"
-    STOMP_HOST    = module.rabbitmq.nombre
-    STOMP_PUERTO  = "61613"
-    STOMP_USUARIO = "c15"
-    ESTADO_REDIS  = "true"
-    REDIS_HOST    = module.redis.nombre
-    REDIS_PUERTO  = "6379"
-  }
+  # Lo que comparten broker, salas, gameplay y social (igual que el compose)
+  entorno_comun = merge(
+    var.kafka_administrado ? local.kafka_event_hubs : local.kafka_contenedor,
+    {
+      EVENTOS_KAFKA = "true"
+      STOMP_RELAY   = "true"
+      STOMP_HOST    = module.rabbitmq.nombre
+      STOMP_PUERTO  = "61613"
+      STOMP_USUARIO = "c15"
+      ESTADO_REDIS  = "true"
+      REDIS_HOST    = module.redis.nombre
+      REDIS_PUERTO  = "6379"
+    }
+  )
 
-  secretos_comunes = {
-    SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG = "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${azurerm_eventhub_namespace_authorization_rule.servicios.primary_connection_string}\";"
-    STOMP_CLAVE                              = random_password.rabbit.result
-    REDIS_CLAVE                              = random_password.redis.result
-  }
+  secretos_comunes = merge(
+    var.kafka_administrado ? tomap({
+      SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG = "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${try(azurerm_eventhub_namespace_authorization_rule.servicios[0].primary_connection_string, "")}\";"
+    }) : tomap({}),
+    {
+      STOMP_CLAVE = random_password.rabbit.result
+      REDIS_CLAVE = random_password.redis.result
+    }
+  )
 
   postgres = "${var.postgres_servidor}.postgres.database.azure.com"
 

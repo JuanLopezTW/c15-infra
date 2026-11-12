@@ -6,7 +6,7 @@ Infraestructura de EscapeRoom C15 (microservicios) en Azure, con Terraform.
 |---|---|
 | Entorno de Container Apps en una red propia (`c15-entorno`, `c15-red`) | `main.tf` |
 | Logs (Log Analytics, tope de 1 GB/día) | `main.tf` |
-| Event Hubs Standard (Kafka) con los 4 topics `c15.*` | `eventos.tf` |
+| Eventos entre servicios: Kafka en contenedor (`kafka_administrado = false`) o Event Hubs Standard con los 4 topics `c15.*` (`true`) | `kafka.tf`, `eventos.tf` |
 | Una base y un usuario por servicio en el Postgres existente | `bases.tf` |
 | RabbitMQ (relay STOMP) y Redis (estado compartido), internos | `soporte.tf` |
 | broker, salas, gameplay, social (internos) y gateway (público) | `servicios.tf` |
@@ -20,6 +20,14 @@ Todo va en **North Central US**, junto al Postgres `escaperoomserverbd`. Solo el
   ```
   az provider register --namespace Microsoft.EventHub
   ```
+
+## Kafka en contenedor o Event Hubs
+
+`kafka_administrado` (en `variables.tf`) decide a dónde van los eventos entre servicios:
+- `false` (por defecto): un Kafka interno en un contenedor, igual que el compose local. Sin disco: si se reinicia se pierden los eventos que iban en camino.
+- `true`: Event Hubs Standard (requiere `Microsoft.EventHub` registrado en la suscripción).
+
+Cambiarlo es un `apply`: crea uno, apunta los servicios al nuevo y borra el otro. Hacerlo cuando nadie esté jugando (durante el cambio un evento puede perderse).
 
 ## Escalado manual
 
