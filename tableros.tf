@@ -4,7 +4,9 @@
 
 locals {
   workspace_id = lower(azurerm_log_analytics_workspace.c15.id)
-  apps_ids     = [for m in [module.gateway, module.broker, module.salas, module.gameplay, module.social] : m.id]
+  # Por nombre (no por el modulo) para que el tablero no dependa de cambios pendientes de las apps
+  apps_ids = [for a in ["c15-gateway", "c15-broker", "c15-salas", "c15-gameplay", "c15-social"] :
+  "${data.azurerm_resource_group.c15.id}/providers/Microsoft.App/containerApps/${a}"]
 
   # ---------- consultas (el periodo lo pone el selector del tablero) ----------
   kql_logs = <<-KQL
