@@ -2,6 +2,15 @@
 # de cada repo (por eso el modulo ignora los cambios de imagen).
 
 locals {
+  # Replicas de cada servicio: fijas si se pidio (escalado manual) o autoescalado por CPU (D2)
+  escala = {
+    for s in ["gateway", "broker", "salas", "gameplay", "social"] : s => (
+      contains(keys(var.replicas_fijas), s)
+      ? { min = var.replicas_fijas[s], max = var.replicas_fijas[s], cpu = null }
+      : { min = var.modo_produccion ? 2 : 1, max = var.max_replicas, cpu = var.cpu_objetivo }
+    )
+  }
+
   # Conexion a Kafka segun el interruptor kafka_administrado (variables.tf)
   kafka_event_hubs = tomap({
     KAFKA_SERVIDORES   = "${try(azurerm_eventhub_namespace.c15[0].name, "")}.servicebus.windows.net:9093"
@@ -51,61 +60,69 @@ locals {
       DB_HOST     = local.postgres
       DB_NAME     = postgresql_database.servicio[s].name
       DB_USERNAME = postgresql_role.servicio[s].name
-      # El Postgres B1ms deja 35 conexiones para apps: 5 por replica (Spring trae 10) deja espacio para
-      # escalar a mano y para Terraform
-      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE = "5"
+      # El Postgres B1ms deja 35 conexiones para apps: con hasta 5 replicas de cada uno de los 3 servicios
+      # con base, 2 por replica (Spring trae 10) son 30. El estado vivo del juego esta en Redis, no aqui.
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE = "2"
     }
   }
 }
 
 module "broker" {
-  source     = "./modulos/servicio"
-  nombre     = "c15-broker"
-  grupo      = data.azurerm_resource_group.c15.name
-  entorno_id = azurerm_container_app_environment.c15.id
-  imagen     = "${var.imagenes}/c15-broker:latest"
-  replicas   = var.replicas.broker
-  jvm        = true
-  tags       = local.tags
-  entorno    = local.entorno_comun
-  secretos   = local.secretos_comunes
+  source       = "./modulos/servicio"
+  nombre       = "c15-broker"
+  grupo        = data.azurerm_resource_group.c15.name
+  entorno_id   = azurerm_container_app_environment.c15.id
+  imagen       = "${var.imagenes}/c15-broker:latest"
+  min_replicas = local.escala.broker.min
+  max_replicas = local.escala.broker.max
+  cpu_objetivo = local.escala.broker.cpu
+  jvm          = true
+  tags         = local.tags
+  entorno      = local.entorno_comun
+  secretos     = local.secretos_comunes
 }
 
 module "salas" {
-  source     = "./modulos/servicio"
-  nombre     = "c15-salas"
-  grupo      = data.azurerm_resource_group.c15.name
-  entorno_id = azurerm_container_app_environment.c15.id
-  imagen     = "${var.imagenes}/c15-salas:latest"
-  replicas   = var.replicas.salas
-  jvm        = true
-  tags       = local.tags
-  entorno    = merge(local.entorno_comun, local.base_de.salas)
-  secretos   = merge(local.secretos_comunes, { DB_PASSWORD = random_password.bd["salas"].result })
+  source       = "./modulos/servicio"
+  nombre       = "c15-salas"
+  grupo        = data.azurerm_resource_group.c15.name
+  entorno_id   = azurerm_container_app_environment.c15.id
+  imagen       = "${var.imagenes}/c15-salas:latest"
+  min_replicas = local.escala.salas.min
+  max_replicas = local.escala.salas.max
+  cpu_objetivo = local.escala.salas.cpu
+  jvm          = true
+  tags         = local.tags
+  entorno      = merge(local.entorno_comun, local.base_de.salas)
+  secretos     = merge(local.secretos_comunes, { DB_PASSWORD = random_password.bd["salas"].result })
 }
 
 module "gameplay" {
-  source     = "./modulos/servicio"
-  nombre     = "c15-gameplay"
-  grupo      = data.azurerm_resource_group.c15.name
-  entorno_id = azurerm_container_app_environment.c15.id
-  imagen     = "${var.imagenes}/c15-gameplay:latest"
-  replicas   = var.replicas.gameplay
-  jvm        = true
-  tags       = local.tags
-  entorno    = merge(local.entorno_comun, local.base_de.gameplay)
-  secretos   = merge(local.secretos_comunes, { DB_PASSWORD = random_password.bd["gameplay"].result })
+  source       = "./modulos/servicio"
+  nombre       = "c15-gameplay"
+  grupo        = data.azurerm_resource_group.c15.name
+  entorno_id   = azurerm_container_app_environment.c15.id
+  imagen       = "${var.imagenes}/c15-gameplay:latest"
+  min_replicas = local.escala.gameplay.min
+  max_replicas = local.escala.gameplay.max
+  cpu_objetivo = local.escala.gameplay.cpu
+  jvm          = true
+  tags         = local.tags
+  entorno      = merge(local.entorno_comun, local.base_de.gameplay)
+  secretos     = merge(local.secretos_comunes, { DB_PASSWORD = random_password.bd["gameplay"].result })
 }
 
 module "social" {
-  source     = "./modulos/servicio"
-  nombre     = "c15-social"
-  grupo      = data.azurerm_resource_group.c15.name
-  entorno_id = azurerm_container_app_environment.c15.id
-  imagen     = "${var.imagenes}/c15-social:latest"
-  replicas   = var.replicas.social
-  jvm        = true
-  tags       = local.tags
+  source       = "./modulos/servicio"
+  nombre       = "c15-social"
+  grupo        = data.azurerm_resource_group.c15.name
+  entorno_id   = azurerm_container_app_environment.c15.id
+  imagen       = "${var.imagenes}/c15-social:latest"
+  min_replicas = local.escala.social.min
+  max_replicas = local.escala.social.max
+  cpu_objetivo = local.escala.social.cpu
+  jvm          = true
+  tags         = local.tags
   entorno = merge(local.entorno_comun, local.base_de.social, {
     SALAS_URL = "http://${module.salas.nombre}" # el chat del lobby le pregunta a salas
   })
@@ -114,15 +131,17 @@ module "social" {
 
 # La unica puerta publica: HTTPS lo pone Azure, y reparte entre las replicas de cada servicio
 module "gateway" {
-  source     = "./modulos/servicio"
-  nombre     = "c15-gateway"
-  grupo      = data.azurerm_resource_group.c15.name
-  entorno_id = azurerm_container_app_environment.c15.id
-  imagen     = "${var.imagenes}/c15-gateway:latest"
-  replicas   = var.replicas.gateway
-  jvm        = true
-  publico    = true
-  tags       = local.tags
+  source       = "./modulos/servicio"
+  nombre       = "c15-gateway"
+  grupo        = data.azurerm_resource_group.c15.name
+  entorno_id   = azurerm_container_app_environment.c15.id
+  imagen       = "${var.imagenes}/c15-gateway:latest"
+  min_replicas = local.escala.gateway.min
+  max_replicas = local.escala.gateway.max
+  cpu_objetivo = local.escala.gateway.cpu
+  jvm          = true
+  publico      = true
+  tags         = local.tags
   entorno = {
     BROKER_URL    = "http://${module.broker.nombre}"
     SALAS_URL     = "http://${module.salas.nombre}"

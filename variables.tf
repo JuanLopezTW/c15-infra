@@ -22,20 +22,38 @@ variable "imagenes" {
   default     = "ghcr.io/juanlopeztw"
 }
 
-variable "replicas" {
-  description = "Replicas fijas por servicio (escalado manual: se cambia aqui y se hace apply)"
+variable "modo_produccion" {
+  description = "true: minimo 2 replicas por servicio (escenarios D1, D2 y R1, y la presentacion). false: minimo 1, para no gastar credito en reposo"
+  type        = bool
+  default     = false
+}
+
+variable "max_replicas" {
+  description = "Tope del autoescalado por servicio (D2)"
+  type        = number
+  default     = 5
+}
+
+variable "cpu_objetivo" {
+  description = "Uso de CPU (%) que dispara una replica mas (D2)"
+  type        = number
+  default     = 70
+}
+
+variable "replicas_fijas" {
+  description = "Escalado manual: servicio -> replicas fijas (sin autoescalado), p. ej. { gameplay = 3 }"
   type        = map(number)
-  default = {
-    gateway  = 1
-    broker   = 1
-    salas    = 1
-    gameplay = 1
-    social   = 1
-  }
+  default     = {}
 }
 
 variable "kafka_administrado" {
   description = "true: Event Hubs (requiere Microsoft.EventHub registrado en la suscripcion). false: Kafka en un contenedor interno"
+  type        = bool
+  default     = false
+}
+
+variable "balanceador_azure" {
+  description = "Plan B: Azure Front Door delante del gateway (~1,2 USD/dia). Requiere Microsoft.Cdn registrado"
   type        = bool
   default     = false
 }

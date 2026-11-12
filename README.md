@@ -29,9 +29,22 @@ Todo va en **North Central US**, junto al Postgres `escaperoomserverbd`. Solo el
 
 Cambiarlo es un `apply`: crea uno, apunta los servicios al nuevo y borra el otro. Hacerlo cuando nadie esté jugando (durante el cambio un evento puede perderse).
 
+## Autoescalado (D2) y modo produccion
+
+Cada servicio escala por CPU (`cpu_objetivo`, 70 %) hasta `max_replicas` (5). El minimo depende de `modo_produccion`:
+- `false` (por defecto): minimo 1, para no gastar credito en reposo.
+- `true`: minimo 2, como dicen los escenarios D1, D2 y R1. Prenderlo para las pruebas y la presentacion:
+  `terraform apply -var modo_produccion=true`.
+
+Una replica nueva recibe trafico solo cuando responde `/api/version` (readiness). El pool de Postgres es de 2 conexiones por replica: 5 replicas x 3 servicios con base = 30 de las 35 que deja el B1ms.
+
+## Plan B del balanceador: Azure Front Door
+
+`balanceador_azure = true` pone Azure Front Door delante del gateway (~1,2 USD/dia, requiere `Microsoft.Cdn` registrado). La URL sale en `balanceador_url`; el front se apunta ahi en vez de al gateway.
+
 ## Escalado manual
 
-Las réplicas son fijas (mínimo = máximo). Para cambiarlas, editar `replicas` en `variables.tf` (o `-var`) y hacer `apply`. El ingress de Container Apps reparte entre las réplicas.
+`replicas_fijas` deja un servicio con un numero fijo de replicas, sin autoescalado: `terraform apply -var 'replicas_fijas={gameplay=3}'`. El ingress de Container Apps reparte entre las replicas.
 
 ## Primera vez
 

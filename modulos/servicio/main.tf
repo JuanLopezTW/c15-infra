@@ -34,8 +34,21 @@ resource "azurerm_container_app" "app" {
   }
 
   template {
-    min_replicas = var.replicas
-    max_replicas = var.replicas
+    min_replicas = var.min_replicas
+    max_replicas = var.max_replicas
+
+    # Autoescalado (D2): agrega replicas cuando el uso de CPU pasa el objetivo y las quita cuando baja
+    dynamic "custom_scale_rule" {
+      for_each = var.cpu_objetivo == null ? [] : [1]
+      content {
+        name             = "cpu"
+        custom_rule_type = "cpu"
+        metadata = {
+          type  = "Utilization"
+          value = tostring(var.cpu_objetivo)
+        }
+      }
+    }
 
     container {
       name    = var.nombre
@@ -57,6 +70,18 @@ resource "azurerm_container_app" "app" {
         content {
           name        = env.value
           secret_name = local.nombre_secreto[env.value]
+        }
+      }
+
+      # Una replica recibe trafico solo cuando Spring ya responde (/api/version es publica y no toca nada)
+      dynamic "readiness_probe" {
+        for_each = var.jvm && var.transporte == "http" ? [1] : []
+        content {
+          transport               = "HTTP"
+          path                    = "/api/version"
+          port                    = var.puerto
+          interval_seconds        = 5
+          failure_count_threshold = 3
         }
       }
 

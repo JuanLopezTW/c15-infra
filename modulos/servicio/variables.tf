@@ -16,10 +16,20 @@ variable "imagen" {
   type        = string
 }
 
-variable "replicas" {
-  description = "Replicas fijas: minimo = maximo (escalado manual)"
+variable "min_replicas" {
+  type    = number
+  default = 1
+}
+
+variable "max_replicas" {
+  type    = number
+  default = 1
+}
+
+variable "cpu_objetivo" {
+  description = "Uso de CPU (%) que dispara una replica mas. null: sin autoescalado"
   type        = number
-  default     = 1
+  default     = null
 }
 
 variable "cpu" {
