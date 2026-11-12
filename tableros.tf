@@ -14,13 +14,18 @@ locals {
     | extend j = parse_json(Log_s)
     | extend evento = tostring(j.evento)
   KQL
-  # Peticiones de jugadores: /api/version es la comprobacion de salud, no gente
-  kql_peticiones = <<-KQL
+  # Peticiones de jugadores en todos los puntos (gateway incluido); /api/version es la comprobacion de salud
+  kql_peticiones_todas = <<-KQL
     ${local.kql_logs}| where evento == 'http.peticion' and tostring(j.http.ruta) != '/api/version'
+  KQL
+  # Solo en los servicios: cada peticion cuenta una vez (el gateway la registra tambien al pasarla)
+  kql_peticiones = <<-KQL
+    ${local.kql_peticiones_todas}| where ContainerAppName_s != 'c15-gateway'
   KQL
 
   kql_negocio_totales = <<-KQL
-    ${local.kql_logs}| summarize
+    ${local.kql_logs}| where ContainerAppName_s != 'c15-gateway'
+    | summarize
         ['Jugadores activos'] = dcountif(tostring(j.userId), evento == 'http.peticion' and isnotempty(tostring(j.userId))),
         ['Sesiones iniciadas'] = countif(evento == 'stomp.conectado'),
         ['Jugadores nuevos'] = countif(evento == 'perfil.registrado'),
@@ -40,6 +45,8 @@ locals {
         by matchId = tostring(j.matchId)
     | where isnotempty(inicio) and isnotempty(fin)
     | summarize ['Duracion promedio de una partida (min)'] = round(avg(fin - inicio) / 1m, 1), ['Partidas medidas'] = count()
+    | evaluate narrow()
+    | project Indicador = Column, Valor = todouble(Value)
   KQL
 
   kql_negocio_mas_usadas = <<-KQL
@@ -57,25 +64,40 @@ locals {
     | summarize Cantidad = count() by bin(TimeGenerated, 5m), Evento = evento
   KQL
 
+  # Lo que siente el jugador: tiempos en la puerta de entrada (gateway); usuarios, de los servicios (tienen el userId)
   kql_tecnico_resumen = <<-KQL
-    ${local.kql_peticiones}| extend ms = todouble(j.duracion.ms), estado = toint(j.http.estado)
-    | summarize ['Peticiones'] = count(), ['Tiempo de respuesta promedio (ms)'] = round(avg(ms)),
-        ['p95 (ms)'] = round(percentile(ms, 95)), ['Errores 5xx'] = countif(estado >= 500),
-        ['Usuarios concurrentes (5 min)'] = dcountif(tostring(j.userId), TimeGenerated > ago(5m))
-    | extend ['% de errores'] = round(100.0 * ['Errores 5xx'] / ['Peticiones'], 2)
+    let entrada = ${replace(local.kql_peticiones_todas, "\n", " ")}
+        | where ContainerAppName_s == 'c15-gateway'
+        | extend ms = todouble(j.duracion.ms), estado = toint(j.http.estado)
+        | summarize ['Peticiones'] = count(), ['Tiempo de respuesta promedio (ms)'] = round(avg(ms)),
+            ['p95 en la entrada (ms)'] = round(percentile(ms, 95)), ['Errores 5xx'] = countif(estado >= 500)
+        | extend ['% de errores'] = round(100.0 * ['Errores 5xx'] / max_of(['Peticiones'], 1), 2), k = 1;
+    let usuarios = ${replace(local.kql_peticiones, "\n", " ")}
+        | where TimeGenerated > ago(5m)
+        | summarize ['Usuarios concurrentes (5 min)'] = dcount(tostring(j.userId))
+        | extend k = 1;
+    entrada
+    | join kind=fullouter usuarios on k
+    | project-away k, k1
     | evaluate narrow()
     | project Indicador = Column, Valor = todouble(Value)
   KQL
 
-  # Una replica degradada (p95 > 300 ms o errores > 2 %) o sin logs en 2 min, como dice el escenario O2
+  # Solo las replicas de la version que corre cada servicio (las reemplazadas por un deploy no cuentan).
+  # DEGRADADA: p95 > 300 ms o errores > 2 %; SIN SENAL: 2 min sin ningun log (ni las comprobaciones de salud).
   kql_tecnico_replicas = <<-KQL
-    let peticiones = ${replace(local.kql_peticiones, "\n", " ")}
+    let actuales = ContainerAppConsoleLogs_CL
+        | summarize arg_max(TimeGenerated, RevisionName_s) by ContainerAppName_s
+        | project Servicio = ContainerAppName_s, RevisionActual = RevisionName_s;
+    let peticiones = ${replace(local.kql_peticiones_todas, "\n", " ")}
         | extend ms = todouble(j.duracion.ms), estado = toint(j.http.estado)
         | summarize Peticiones = count(), p50 = round(percentile(ms, 50)), p95 = round(percentile(ms, 95)),
             Errores5xx = countif(estado >= 500) by Servicio = ContainerAppName_s, Replica = ContainerGroupName_s;
     ${replace(local.kql_logs, "\n", " ")}
     | summarize UltimaSenal = max(TimeGenerated), Excepciones = countif(tostring(j.log.level) == 'ERROR')
-        by Servicio = ContainerAppName_s, Replica = ContainerGroupName_s
+        by Servicio = ContainerAppName_s, Replica = ContainerGroupName_s, Revision = RevisionName_s
+    | join kind=inner actuales on Servicio
+    | where Revision == RevisionActual
     | join kind=leftouter peticiones on Servicio, Replica
     | extend PctErrores = round(100.0 * coalesce(Errores5xx, 0) / max_of(coalesce(Peticiones, 0), 1), 2)
     | extend Estado = case(UltimaSenal < ago(2m), 'SIN SENAL', p95 > 300 or PctErrores > 2, 'DEGRADADA', 'OK')
@@ -84,12 +106,13 @@ locals {
   KQL
 
   kql_tecnico_p95_tiempo = <<-KQL
-    ${local.kql_peticiones}| summarize p95 = percentile(todouble(j.duracion.ms), 95) by bin(TimeGenerated, 1m), Servicio = ContainerAppName_s
+    ${local.kql_peticiones_todas}| summarize p95 = round(percentile(todouble(j.duracion.ms), 95)) by bin(TimeGenerated, 5m),
+        Servicio = iff(ContainerAppName_s == 'c15-gateway', 'entrada (gateway)', ContainerAppName_s)
   KQL
 
   kql_tecnico_errores_tiempo = <<-KQL
     ${local.kql_logs}| where tostring(j.log.level) == 'ERROR' or (evento == 'http.peticion' and toint(j.http.estado) >= 500)
-    | summarize Errores = count() by bin(TimeGenerated, 1m), Servicio = ContainerAppName_s
+    | summarize Errores = count() by bin(TimeGenerated, 5m), Servicio = ContainerAppName_s
   KQL
 
   # ---------- piezas del Workbook ----------
@@ -118,24 +141,27 @@ locals {
     }
   }
 
+  # tamano: 0 mediano, 1 pequeno, 3 minimo (los cuadritos usan el minimo: no dejan espacio en blanco)
+  # ancho: "100" (fila entera) o "50" (dos lado a lado)
   consulta = { for k, v in {
-    negocio_totales          = { titulo = "Uso del juego", query = local.kql_negocio_totales, vista = "tiles" }
-    negocio_duracion         = { titulo = "Tiempo promedio de interaccion", query = local.kql_negocio_duracion, vista = "table" }
-    negocio_mas_usadas       = { titulo = "Funcionalidades mas usadas", query = local.kql_negocio_mas_usadas, vista = "barchart" }
-    negocio_jugadores_tiempo = { titulo = "Jugadores activos en el tiempo", query = local.kql_negocio_jugadores_tiempo, vista = "timechart" }
-    negocio_partidas_tiempo  = { titulo = "Partidas y acertijos en el tiempo", query = local.kql_negocio_partidas_tiempo, vista = "timechart" }
-    tecnico_resumen          = { titulo = "Resumen del sistema", query = local.kql_tecnico_resumen, vista = "tiles" }
-    tecnico_replicas         = { titulo = "Estado por replica (degradada: p95 > 300 ms o errores > 2 %; sin senal: 2 min sin logs)", query = local.kql_tecnico_replicas, vista = "table" }
-    tecnico_p95_tiempo       = { titulo = "Tiempo de respuesta p95 por servicio (ms)", query = local.kql_tecnico_p95_tiempo, vista = "timechart" }
-    tecnico_errores_tiempo   = { titulo = "Errores y excepciones por servicio", query = local.kql_tecnico_errores_tiempo, vista = "timechart" }
+    negocio_totales          = { titulo = "Uso del juego", query = local.kql_negocio_totales, vista = "tiles", ancho = "100" }
+    negocio_duracion         = { titulo = "Tiempo promedio de interaccion", query = local.kql_negocio_duracion, vista = "tiles", ancho = "100" }
+    negocio_jugadores_tiempo = { titulo = "Jugadores activos en el tiempo", query = local.kql_negocio_jugadores_tiempo, vista = "timechart", ancho = "50" }
+    negocio_partidas_tiempo  = { titulo = "Partidas y acertijos en el tiempo", query = local.kql_negocio_partidas_tiempo, vista = "timechart", ancho = "50" }
+    negocio_mas_usadas       = { titulo = "Funcionalidades mas usadas", query = local.kql_negocio_mas_usadas, vista = "barchart", ancho = "100" }
+    tecnico_resumen          = { titulo = "Resumen del sistema (tiempos en la puerta de entrada)", query = local.kql_tecnico_resumen, vista = "tiles", ancho = "100" }
+    tecnico_replicas         = { titulo = "Estado por replica (DEGRADADA: p95 > 300 ms o errores > 2 %; SIN SENAL: 2 min sin logs)", query = local.kql_tecnico_replicas, vista = "table", ancho = "100" }
+    tecnico_p95_tiempo       = { titulo = "Tiempo de respuesta p95 por servicio (ms, cada 5 min)", query = local.kql_tecnico_p95_tiempo, vista = "timechart", ancho = "50" }
+    tecnico_errores_tiempo   = { titulo = "Errores y excepciones por servicio (cada 5 min)", query = local.kql_tecnico_errores_tiempo, vista = "timechart", ancho = "50" }
     } : k => {
-    type = 3
-    name = k
+    type        = 3
+    name        = k
+    customWidth = v.ancho
     content = merge({
       version                  = "KqlItem/1.0"
       title                    = v.titulo
       query                    = v.query
-      size                     = 0
+      size                     = v.vista == "tiles" ? 3 : 0
       queryType                = 0
       resourceType             = "microsoft.operationalinsights/workspaces"
       crossComponentResources  = [local.workspace_id]
@@ -147,16 +173,20 @@ locals {
         leftContent  = { columnMatch = "Valor", formatter = 12, formatOptions = { palette = "auto" } }
         showBorder   = true
       }
+      } : {}, v.vista == "timechart" ? {
+      # La leyenda sin el numero grande (sumaba los puntos: no significa nada para un p95)
+      chartSettings = { showMetricInfo = false, showLegend = true }
     } : {})
   } }
 
   metrica = { for k, v in {
-    cpu      = { titulo = "CPU por replica (%)", metrica = "CpuPercentage", agregado = 4, division = "podName" }
-    memoria  = { titulo = "Memoria por replica (%)", metrica = "MemoryPercentage", agregado = 4, division = "podName" }
-    replicas = { titulo = "Replicas por servicio (autoescalado)", metrica = "Replicas", agregado = 3, division = null }
+    cpu      = { titulo = "CPU por replica (%)", metrica = "CpuPercentage", agregado = 4, division = "podName", ancho = "50" }
+    memoria  = { titulo = "Memoria por replica (%)", metrica = "MemoryPercentage", agregado = 4, division = "podName", ancho = "50" }
+    replicas = { titulo = "Replicas por servicio (autoescalado)", metrica = "Replicas", agregado = 3, division = null, ancho = "100" }
     } : k => {
-    type = 10
-    name = "metrica_${k}"
+    type        = 10
+    name        = "metrica_${k}"
+    customWidth = v.ancho
     content = {
       chartId                  = "c15-${k}"
       version                  = "MetricsItem/2.0"
@@ -210,7 +240,7 @@ resource "azurerm_application_insights_workbook" "tecnico" {
     version             = "Notebook/1.0"
     fallbackResourceIds = [local.workspace_id]
     items = [
-      { type = 1, name = "titulo", content = { json = "## Escape Room C15 - estado del sistema\nPor servicio y replica. Degradada: p95 > 300 ms o errores > 2 %. Sin senal: 2 min sin logs." } },
+      { type = 1, name = "titulo", content = { json = "## Escape Room C15 - estado del sistema\nPor servicio y replica. Tiempos de respuesta en la puerta de entrada (gateway), que es lo que siente el jugador." } },
       local.selector_periodo,
       local.consulta.tecnico_resumen,
       local.consulta.tecnico_replicas,
