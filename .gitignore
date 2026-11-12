@@ -1,0 +1,11 @@
+# Proveedores bajados por terraform init
+.terraform/
+# El state y sus copias guardan claves: viven en el Storage Account, nunca en git
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+# Valores locales (la clave del admin de Postgres va por variable de entorno, no en archivos)
+*.tfvars
+override.tf
+override.tf.json
