@@ -32,3 +32,14 @@ resource "postgresql_grant" "sin_publico" {
   object_type = "database"
   privileges  = []
 }
+
+# Desde Postgres 15 solo el dueno del esquema public crea tablas en el, y en Azure ese dueno es el grupo
+# administrador, no el dueno de la base. Cada servicio recibe permiso de crear y usar public solo en SU base.
+resource "postgresql_grant" "esquema" {
+  for_each    = local.con_base
+  database    = postgresql_database.servicio[each.key].name
+  role        = postgresql_role.servicio[each.key].name
+  schema      = "public"
+  object_type = "schema"
+  privileges  = ["CREATE", "USAGE"]
+}
