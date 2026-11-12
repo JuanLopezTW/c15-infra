@@ -51,6 +51,9 @@ locals {
       DB_HOST     = local.postgres
       DB_NAME     = postgresql_database.servicio[s].name
       DB_USERNAME = postgresql_role.servicio[s].name
+      # El Postgres B1ms deja 35 conexiones para apps: 5 por replica (Spring trae 10) deja espacio para
+      # escalar a mano y para Terraform
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE = "5"
     }
   }
 }

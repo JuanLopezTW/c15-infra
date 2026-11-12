@@ -43,7 +43,8 @@ variable "kafka_administrado" {
 variable "cors_origenes" {
   description = "Origenes que el gateway deja llamar a la API (el front en Azure Static Web Apps)"
   type        = string
-  default     = "https://mango-coast-0b946ea10.3.azurestaticapps.net"
+  # localhost:5173 = npm run dev contra Azure, solo mientras se prueba (quitarlo despues de la presentacion)
+  default = "https://mango-coast-0b946ea10.3.azurestaticapps.net,http://localhost:5173"
 }
 
 # ---------- Postgres que ya existe ----------
