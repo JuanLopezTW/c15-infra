@@ -37,6 +37,14 @@ Lo de los logs esta consolidado entre replicas (una partida cuenta una vez). Las
 
 Cambiarlo es un `apply`: crea uno, apunta los servicios al nuevo y borra el otro. Hacerlo cuando nadie esté jugando (durante el cambio un evento puede perderse).
 
+## Apagar y prender (para no gastar credito)
+
+```
+powershell -File scripts\apagar.ps1
+powershell -File scripts\prender.ps1
+```
+`apagar` desactiva la revision activa de las 8 apps (no corren ni cobran; conservan su configuracion). `prender` las reactiva en orden: RabbitMQ, Redis y Kafka, despues los servicios y al final el gateway (~3 min). Un push a un servicio o un `terraform apply` que lo cambie lo vuelve a prender solo.
+
 ## Autoescalado (D2) y modo produccion
 
 Cada servicio escala por CPU (`cpu_objetivo`, 70 %) hasta `max_replicas` (5). El minimo depende de `modo_produccion`:
