@@ -6,7 +6,7 @@ Infraestructura de EscapeRoom C15 (microservicios) en Azure, con Terraform.
 |---|---|
 | Entorno de Container Apps en una red propia (`c15-entorno`, `c15-red`) | `main.tf` |
 | Logs (Log Analytics, tope de 1 GB/día) | `main.tf` |
-| Eventos entre servicios: Kafka en contenedor (`kafka_administrado = false`) o Event Hubs Standard con los 4 topics `c15.*` (`true`) | `kafka.tf`, `eventos.tf` |
+| Eventos entre servicios: Event Hubs Standard con los 4 topics `c15.*` (`kafka_administrado = true`, por defecto) o Kafka en contenedor (`false`) | `kafka.tf`, `eventos.tf` |
 | Una base y un usuario por servicio en el Postgres existente | `bases.tf` |
 | RabbitMQ (relay STOMP) y Redis (estado compartido), internos | `soporte.tf` |
 | broker, salas, gameplay, social (internos) y gateway (público) | `servicios.tf` |
@@ -32,8 +32,8 @@ Lo de los logs esta consolidado entre replicas (una partida cuenta una vez). Las
 ## Kafka en contenedor o Event Hubs
 
 `kafka_administrado` (en `variables.tf`) decide a dónde van los eventos entre servicios:
-- `false` (por defecto): un Kafka interno en un contenedor, igual que el compose local. Sin disco: si se reinicia se pierden los eventos que iban en camino.
-- `true`: Event Hubs Standard (requiere `Microsoft.EventHub` registrado en la suscripción).
+- `false`: un Kafka interno en un contenedor, igual que el compose local. Sin disco: si se reinicia se pierden los eventos que iban en camino.
+- `true` (por defecto): Event Hubs Standard (requiere `Microsoft.EventHub` registrado en la suscripción). Cobra siempre (~0,75 USD/dia), tambien con las apps apagadas.
 
 Cambiarlo es un `apply`: crea uno, apunta los servicios al nuevo y borra el otro. Hacerlo cuando nadie esté jugando (durante el cambio un evento puede perderse).
 
@@ -43,7 +43,7 @@ Cambiarlo es un `apply`: crea uno, apunta los servicios al nuevo y borra el otro
 powershell -File scripts\apagar.ps1
 powershell -File scripts\prender.ps1
 ```
-`apagar` desactiva la revision activa de las 8 apps (no corren ni cobran; conservan su configuracion). `prender` las reactiva en orden: RabbitMQ, Redis y Kafka, despues los servicios y al final el gateway (~3 min). Un push a un servicio o un `terraform apply` que lo cambie lo vuelve a prender solo.
+`apagar` desactiva la revision activa de las apps (no corren ni cobran; conservan su configuracion). `prender` las reactiva en orden: RabbitMQ, Redis y Kafka, despues los servicios y al final el gateway (~3 min). Un push a un servicio o un `terraform apply` que lo cambie lo vuelve a prender solo.
 
 ## Autoescalado (D2) y modo produccion
 

@@ -1,7 +1,9 @@
-# Prende las 8 Container Apps en orden: primero RabbitMQ, Redis y Kafka (los demas los necesitan al arrancar),
+# Prende las Container Apps en orden: primero RabbitMQ, Redis y Kafka (si esta en contenedor) (los demas los necesitan al arrancar),
 # espera a que esten sanos, y despues los servicios, con el gateway al final. Tarda unos 2-3 minutos.
 # Uso: powershell -File scripts\prender.ps1
 $grupo = 'Escape_Room_RG'
+# c15-kafka solo existe con kafka_administrado = false
+$existentes = az containerapp list -g $grupo --query "[].name" -o tsv
 
 function Prender($a) {
     $rev = az containerapp show -g $grupo -n $a --query properties.latestRevisionName -o tsv
@@ -21,6 +23,7 @@ function EsperarSana($a, $rev) {
 
 foreach ($grupoDeApps in @(@('c15-rabbitmq', 'c15-redis', 'c15-kafka'), @('c15-broker', 'c15-salas', 'c15-gameplay', 'c15-social'), @('c15-gateway'))) {
     $revisiones = @{}
+    $grupoDeApps = $grupoDeApps | Where-Object { $existentes -contains $_ }
     foreach ($a in $grupoDeApps) { $revisiones[$a] = Prender $a }
     foreach ($a in $grupoDeApps) { EsperarSana $a $revisiones[$a] }
 }

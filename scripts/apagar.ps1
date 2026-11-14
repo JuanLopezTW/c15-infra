@@ -1,8 +1,11 @@
-# Apaga las 8 Container Apps: desactiva la revision activa de cada una. No corren ni cobran, y conservan toda
+# Apaga las Container Apps del juego: desactiva la revision activa de cada una. No corren ni cobran, y conservan toda
 # su configuracion. Se prenden con prender.ps1. Requiere: az login en la suscripcion del grupo.
 # Uso: powershell -File scripts\apagar.ps1
 $grupo = 'Escape_Room_RG'
 $apps = 'c15-gateway', 'c15-broker', 'c15-salas', 'c15-gameplay', 'c15-social', 'c15-kafka', 'c15-rabbitmq', 'c15-redis'
+# c15-kafka solo existe con kafka_administrado = false (con Event Hubs no hay que apagarlo: es de Azure)
+$existentes = az containerapp list -g $grupo --query "[].name" -o tsv
+$apps = $apps | Where-Object { $existentes -contains $_ }
 foreach ($a in $apps) {
     $rev = az containerapp revision list -g $grupo -n $a --query "[?properties.active].name | [0]" -o tsv
     if ($rev) {

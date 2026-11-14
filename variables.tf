@@ -49,7 +49,7 @@ variable "replicas_fijas" {
 variable "kafka_administrado" {
   description = "true: Event Hubs (requiere Microsoft.EventHub registrado en la suscripcion). false: Kafka en un contenedor interno"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "balanceador_azure" {
