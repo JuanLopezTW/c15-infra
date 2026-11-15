@@ -91,7 +91,9 @@ locals {
   KQL
 
   # Solo las replicas de la version que corre cada servicio (las reemplazadas por un deploy no cuentan).
-  # DEGRADADA: p95 > 300 ms o errores > 2 %; SIN SENAL: 2 min sin ningun log (ni las comprobaciones de salud).
+  # El estado mira los ULTIMOS 2 MIN (no todo el periodo elegido: si no, un minuto malo se diluye en una hora):
+  # DEGRADADA: p95 > 300 ms o errores > 2 % en esos 2 min; SIN SENAL: 90 s sin ningun log (ni las comprobaciones de
+  # salud, que llegan cada pocos segundos). Los logs tardan ~7 s en llegar: se detecta dentro de los 2 min (O2).
   kql_tecnico_replicas = <<-KQL
     let actuales = ContainerAppConsoleLogs_CL
         | summarize arg_max(TimeGenerated, RevisionName_s) by ContainerAppName_s
@@ -100,16 +102,23 @@ locals {
         | extend ms = todouble(j.duracion.ms), estado = toint(j.http.estado)
         | summarize Peticiones = count(), p50 = round(percentile(ms, 50)), p95 = round(percentile(ms, 95)),
             Errores5xx = countif(estado >= 500) by Servicio = ContainerAppName_s, Replica = ContainerGroupName_s;
+    let recientes = ${replace(local.kql_peticiones_todas, "\n", " ")}
+        | where TimeGenerated > ago(2m)
+        | extend ms = todouble(j.duracion.ms), estado = toint(j.http.estado)
+        | summarize p95Ahora = round(percentile(ms, 95)), PctErroresAhora = round(100.0 * countif(estado >= 500) / count(), 2)
+            by Servicio = ContainerAppName_s, Replica = ContainerGroupName_s;
     ${replace(local.kql_logs, "\n", " ")}
     | summarize UltimaSenal = max(TimeGenerated), Excepciones = countif(tostring(j.log.level) == 'ERROR')
         by Servicio = ContainerAppName_s, Replica = ContainerGroupName_s, Revision = RevisionName_s
     | join kind=inner actuales on Servicio
     | where Revision == RevisionActual
     | join kind=leftouter peticiones on Servicio, Replica
+    | join kind=leftouter recientes on Servicio, Replica
     | join kind=leftouter (${replace(local.kql_conexiones, "\n", " ")} | summarize arg_max(TimeGenerated, Conexiones) by Replica | project Replica, Conexiones) on Replica
     | extend PctErrores = round(100.0 * coalesce(Errores5xx, 0) / max_of(coalesce(Peticiones, 0), 1), 2)
-    | extend Estado = case(UltimaSenal < ago(2m), 'SIN SENAL', p95 > 300 or PctErrores > 2, 'DEGRADADA', 'OK')
-    | project Estado, Servicio, Replica, Peticiones = coalesce(Peticiones, 0), p50, p95, PctErrores, Excepciones, Conexiones, UltimaSenal
+    | extend Estado = case(UltimaSenal < ago(90s), 'SIN SENAL', p95Ahora > 300 or PctErroresAhora > 2, 'DEGRADADA', 'OK')
+    | project Estado, Servicio, Replica, ['p95 ultimos 2 min'] = p95Ahora, ['% errores ultimos 2 min'] = PctErroresAhora,
+        Peticiones = coalesce(Peticiones, 0), p50, p95, PctErrores, Excepciones, Conexiones, UltimaSenal
     | order by Estado asc, Servicio asc
   KQL
 
@@ -189,7 +198,7 @@ locals {
     negocio_partidas_tiempo  = { titulo = "Partidas y acertijos en el tiempo", query = local.kql_negocio_partidas_tiempo, vista = "timechart", ancho = "50" }
     negocio_mas_usadas       = { titulo = "Funcionalidades mas usadas", query = local.kql_negocio_mas_usadas, vista = "barchart", ancho = "100" }
     tecnico_resumen          = { titulo = "Resumen del sistema (tiempos en la puerta de entrada)", query = local.kql_tecnico_resumen, vista = "tiles", ancho = "100" }
-    tecnico_replicas         = { titulo = "Estado por replica (DEGRADADA: p95 > 300 ms o errores > 2 %; SIN SENAL: 2 min sin logs)", query = local.kql_tecnico_replicas, vista = "table", ancho = "100" }
+    tecnico_replicas         = { titulo = "Estado por replica, ultimos 2 min (DEGRADADA: p95 > 300 ms o errores > 2 %; SIN SENAL: 90 s sin logs)", query = local.kql_tecnico_replicas, vista = "table", ancho = "100" }
     tecnico_p95_tiempo       = { titulo = "Tiempo de respuesta p95 por servicio (ms, cada 5 min)", query = local.kql_tecnico_p95_tiempo, vista = "timechart", ancho = "50" }
     tecnico_errores_tiempo   = { titulo = "Errores y excepciones por servicio (cada 5 min)", query = local.kql_tecnico_errores_tiempo, vista = "timechart", ancho = "50" }
     tecnico_conexiones       = { titulo = "Conexiones de tiempo real por replica del broker", query = local.kql_tecnico_conexiones_tiempo, vista = "timechart", ancho = "100" }
