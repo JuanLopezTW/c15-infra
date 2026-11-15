@@ -1,6 +1,7 @@
 # Los 2 tableros obligatorios (O2) como Azure Workbooks, en el portal: Escape_Room_RG -> Workbooks.
 # Las cifras de negocio y de peticiones salen de los logs centralizados (consolidados entre replicas: una partida
-# cuenta una vez); CPU, memoria y replicas, de las metricas de cada Container App. Se actualizan solos.
+# cuenta una vez); CPU, memoria y replicas, de las metricas de cada Container App; mensajes, de Event Hubs.
+# Se actualizan solos.
 
 locals {
   workspace_id = lower(azurerm_log_analytics_workspace.c15.id)
@@ -76,9 +77,15 @@ locals {
         | where TimeGenerated > ago(5m)
         | summarize ['Usuarios concurrentes (5 min)'] = dcount(tostring(j.userId))
         | extend k = 1;
+    let conexiones = ${replace(local.kql_conexiones, "\n", " ")}
+        | where TimeGenerated > ago(2m)
+        | summarize arg_max(TimeGenerated, Conexiones) by Replica
+        | summarize ['Conexiones de tiempo real (ahora)'] = sum(Conexiones)
+        | extend k = 1;
     entrada
     | join kind=fullouter usuarios on k
-    | project-away k, k1
+    | join kind=fullouter conexiones on k
+    | project-away k, k1, k2
     | evaluate narrow()
     | project Indicador = Column, Valor = todouble(Value)
   KQL
@@ -99,15 +106,47 @@ locals {
     | join kind=inner actuales on Servicio
     | where Revision == RevisionActual
     | join kind=leftouter peticiones on Servicio, Replica
+    | join kind=leftouter (${replace(local.kql_conexiones, "\n", " ")} | summarize arg_max(TimeGenerated, Conexiones) by Replica | project Replica, Conexiones) on Replica
     | extend PctErrores = round(100.0 * coalesce(Errores5xx, 0) / max_of(coalesce(Peticiones, 0), 1), 2)
     | extend Estado = case(UltimaSenal < ago(2m), 'SIN SENAL', p95 > 300 or PctErrores > 2, 'DEGRADADA', 'OK')
-    | project Estado, Servicio, Replica, Peticiones = coalesce(Peticiones, 0), p50, p95, PctErrores, Excepciones, UltimaSenal
+    | project Estado, Servicio, Replica, Peticiones = coalesce(Peticiones, 0), p50, p95, PctErrores, Excepciones, Conexiones, UltimaSenal
     | order by Estado asc, Servicio asc
   KQL
 
   kql_tecnico_p95_tiempo = <<-KQL
     ${local.kql_peticiones_todas}| summarize p95 = round(percentile(todouble(j.duracion.ms), 95)) by bin(TimeGenerated, 5m),
         Servicio = iff(ContainerAppName_s == 'c15-gateway', 'entrada (gateway)', ContainerAppName_s)
+  KQL
+
+  # Cada replica del broker reporta sus conexiones STOMP cada 30 s (ConexionesWebSocket)
+  kql_conexiones = <<-KQL
+    ${local.kql_logs}| where evento == 'ws.conexiones'
+    | extend Replica = ContainerGroupName_s, Conexiones = toint(j.ws.conexiones)
+  KQL
+
+  kql_tecnico_conexiones_tiempo = <<-KQL
+    ${local.kql_conexiones}| summarize Conexiones = max(Conexiones) by bin(TimeGenerated, 1m), Replica
+  KQL
+
+  # Seguridad (S1, S2, S3): lo rechazado en la API (contado en el gateway: cada intento una vez) y en el tiempo
+  # real (el broker: CONNECT sin token valido, suscripciones o envios no permitidos)
+  kql_seguridad = <<-KQL
+    ${local.kql_logs}| extend estado = toint(j.http.estado)
+    | where (evento == 'http.peticion' and ContainerAppName_s == 'c15-gateway' and estado in (401, 403, 429))
+        or evento in ('stomp.rechazado', 'stomp.denegado')
+    | extend Motivo = case(estado == 401, 'Sin token o token invalido (401)', estado == 403, 'Sin permiso (403)',
+        estado == 429, 'Demasiados mensajes (429)', evento == 'stomp.rechazado', 'Tiempo real: conexion sin token valido',
+        'Tiempo real: canal no permitido')
+  KQL
+
+  kql_seguridad_tiempo = <<-KQL
+    ${local.kql_seguridad}| summarize Rechazos = count() by bin(TimeGenerated, 5m), Motivo
+  KQL
+
+  kql_seguridad_rutas = <<-KQL
+    ${local.kql_seguridad}| summarize Rechazos = count(), Ultimo = max(TimeGenerated)
+        by Motivo, Ruta = iff(evento == 'http.peticion', strcat(tostring(j.http.metodo), ' ', tostring(j.http.ruta)), strcat('STOMP ', tostring(j.comando)))
+    | top 10 by Rechazos
   KQL
 
   kql_tecnico_errores_tiempo = <<-KQL
@@ -153,6 +192,9 @@ locals {
     tecnico_replicas         = { titulo = "Estado por replica (DEGRADADA: p95 > 300 ms o errores > 2 %; SIN SENAL: 2 min sin logs)", query = local.kql_tecnico_replicas, vista = "table", ancho = "100" }
     tecnico_p95_tiempo       = { titulo = "Tiempo de respuesta p95 por servicio (ms, cada 5 min)", query = local.kql_tecnico_p95_tiempo, vista = "timechart", ancho = "50" }
     tecnico_errores_tiempo   = { titulo = "Errores y excepciones por servicio (cada 5 min)", query = local.kql_tecnico_errores_tiempo, vista = "timechart", ancho = "50" }
+    tecnico_conexiones       = { titulo = "Conexiones de tiempo real por replica del broker", query = local.kql_tecnico_conexiones_tiempo, vista = "timechart", ancho = "100" }
+    seguridad_tiempo         = { titulo = "Intentos rechazados (cada 5 min)", query = local.kql_seguridad_tiempo, vista = "timechart", ancho = "50" }
+    seguridad_rutas          = { titulo = "Rutas con mas rechazos", query = local.kql_seguridad_rutas, vista = "table", ancho = "50" }
     } : k => {
     type        = 3
     name        = k
@@ -203,6 +245,27 @@ locals {
       )]
     }
   } }
+
+  # Eventos entre servicios (Event Hubs): lo que entra, lo que sale y si Azure nos limita por capacidad
+  metrica_eventos = var.kafka_administrado ? [{
+    type        = 10
+    name        = "metrica_eventos"
+    customWidth = "100"
+    content = {
+      chartId                  = "c15-eventos"
+      version                  = "MetricsItem/2.0"
+      title                    = "Eventos entre servicios (Event Hubs): mensajes y limitaciones"
+      size                     = 0
+      chartType                = 2
+      resourceType             = "microsoft.eventhub/namespaces"
+      metricScope              = 0
+      resourceIds              = [lower(azurerm_eventhub_namespace.c15[0].id)]
+      timeContextFromParameter = "Periodo"
+      metrics = [for m in ["IncomingMessages", "OutgoingMessages", "ThrottledRequests", "ServerErrors"] :
+        { namespace = "microsoft.eventhub/namespaces", metric = "microsoft.eventhub/namespaces--${m}", aggregation = 1 }
+      ]
+    }
+  }] : []
 }
 
 resource "azurerm_application_insights_workbook" "negocio" {
@@ -239,16 +302,21 @@ resource "azurerm_application_insights_workbook" "tecnico" {
   data_json = jsonencode({
     version             = "Notebook/1.0"
     fallbackResourceIds = [local.workspace_id]
-    items = [
+    items = concat([
       { type = 1, name = "titulo", content = { json = "## Escape Room C15 - estado del sistema\nPor servicio y replica. Tiempos de respuesta en la puerta de entrada (gateway), que es lo que siente el jugador." } },
       local.selector_periodo,
       local.consulta.tecnico_resumen,
       local.consulta.tecnico_replicas,
       local.consulta.tecnico_p95_tiempo,
       local.consulta.tecnico_errores_tiempo,
+      local.consulta.tecnico_conexiones,
       local.metrica.cpu,
       local.metrica.memoria,
       local.metrica.replicas,
-    ]
+      { type = 1, name = "titulo_seguridad", content = { json = "### Seguridad\nIntentos rechazados en la puerta de entrada: sin token o con un token invalido (401), sin el rol necesario (403) o demasiados mensajes de chat (429)." } },
+      local.consulta.seguridad_tiempo,
+      local.consulta.seguridad_rutas,
+      { type = 1, name = "titulo_eventos", content = { json = "### Eventos entre servicios" } },
+    ], local.metrica_eventos)
   })
 }
