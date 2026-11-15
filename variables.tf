@@ -41,9 +41,11 @@ variable "max_replicas" {
 }
 
 variable "cpu_objetivo" {
+  # 40 % y no 70 %: una replica nueva tarda ~2 min en estar lista (arranque de Java + readiness), asi que se pide
+  # antes de que la carga se note. Con 128 jugadores en rampa la CPU se quedo en ~52 % y al 70 % nunca escalaba.
   description = "Uso de CPU (%) que dispara una replica mas (D2)"
   type        = number
-  default     = 70
+  default     = 40
 }
 
 variable "replicas_fijas" {

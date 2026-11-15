@@ -47,7 +47,7 @@ powershell -File scripts\prender.ps1
 
 ## Autoescalado (D2) y modo produccion
 
-Cada servicio escala por CPU (`cpu_objetivo`, 70 %) hasta `max_replicas` (5). El minimo depende de `modo_produccion`:
+Cada servicio escala por CPU (`cpu_objetivo`, 40 %: una replica nueva tarda ~2 min en estar lista, asi que se pide antes de que la carga se note) hasta `max_replicas` (5). Una replica se retira tras 5 min sin carga. El minimo depende de `modo_produccion`:
 - `false` (por defecto): minimo 1, para no gastar credito en reposo.
 - `true`: minimo 2, como dicen los escenarios D1, D2 y R1. Prenderlo para las pruebas y la presentacion:
   `terraform apply -var modo_produccion=true`.
