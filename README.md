@@ -54,6 +54,14 @@ Cada servicio escala por CPU (`cpu_objetivo`, 70 %) hasta `max_replicas` (5). El
 
 Una replica nueva recibe trafico solo cuando responde `/api/version` (readiness). El pool de Postgres es de 2 conexiones por replica: 5 replicas x 3 servicios con base = 30 de las 35 que deja el B1ms.
 
+## Prueba de caida (D1)
+
+`caida_simulada = true` le da a broker y gameplay `POST /dev/caida/c15-broker` y `/dev/caida/c15-gameplay` (solo admin): la replica que atiende responde su nombre y se muere en seco, como un corte de luz; Azure la vuelve a levantar. Se prende junto con el minimo de 2 replicas y se apaga al terminar:
+```
+terraform apply -var modo_produccion=true -var caida_simulada=true
+terraform apply -var modo_produccion=true
+```
+
 ## Plan B del balanceador: Azure Front Door
 
 `balanceador_azure = true` pone Azure Front Door delante del gateway (~1,2 USD/dia, requiere `Microsoft.Cdn` registrado). La URL sale en `balanceador_url`; el front se apunta ahi en vez de al gateway.

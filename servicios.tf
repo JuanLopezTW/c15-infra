@@ -53,6 +53,9 @@ locals {
     }
   )
 
+  # Prueba de caida D1 (CaidaSimuladaController): solo en broker y gameplay, y solo si se pide
+  caida = var.caida_simulada ? { C15_CAIDA_SIMULADA_ACTIVA = "true" } : {}
+
   postgres = "${var.postgres_servidor}.postgres.database.azure.com"
 
   base_de = {
@@ -78,7 +81,7 @@ module "broker" {
   cpu_objetivo = local.escala.broker.cpu
   jvm          = true
   tags         = local.tags
-  entorno      = local.entorno_comun
+  entorno      = merge(local.entorno_comun, local.caida)
   secretos     = local.secretos_comunes
 }
 
@@ -108,7 +111,7 @@ module "gameplay" {
   cpu_objetivo = local.escala.gameplay.cpu
   jvm          = true
   tags         = local.tags
-  entorno      = merge(local.entorno_comun, local.base_de.gameplay)
+  entorno      = merge(local.entorno_comun, local.base_de.gameplay, local.caida)
   secretos     = merge(local.secretos_comunes, { DB_PASSWORD = random_password.bd["gameplay"].result })
 }
 

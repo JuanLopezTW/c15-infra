@@ -28,6 +28,12 @@ variable "modo_produccion" {
   default     = false
 }
 
+variable "caida_simulada" {
+  description = "true: broker y gameplay exponen POST /dev/caida/<servicio> (solo admin) para la prueba de caida D1. Prenderlo solo durante la prueba"
+  type        = bool
+  default     = false
+}
+
 variable "max_replicas" {
   description = "Tope del autoescalado por servicio (D2)"
   type        = number
