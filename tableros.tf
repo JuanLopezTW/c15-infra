@@ -51,7 +51,9 @@ locals {
   KQL
 
   # Lo que hace el jugador (no las consultas GET ni las herramientas de admin /dev), con nombres para el gerente.
-  # Una ruta que no este aqui aparece tal cual (METODO /ruta) en vez de perderse.
+  # Una ruta que no este aqui aparece tal cual (METODO /ruta) en vez de perderse. Ojo: el Workbook toma cualquier
+  # {texto} de la consulta como un parametro suyo, asi que la consulta compara con <matchId> (las llaves de la ruta
+  # se cambian por < > con make_string, sin escribirlas).
   nombres_funciones = {
     "POST /api/partidas/{matchId}/jugadores/{userId}/movimiento"                             = "Moverse en el mapa"
     "POST /api/partidas/{matchId}/jugadores/{userId}/objetos/{componenteMapaId}/recoleccion" = "Recoger un objeto"
@@ -77,9 +79,9 @@ locals {
   kql_negocio_mas_usadas = <<-KQL
     ${local.kql_peticiones}| extend metodo = tostring(j.http.metodo), ruta = tostring(j.http.ruta)
     | where metodo != 'GET' and not(ruta startswith '/dev/')
-    | extend clave = strcat(metodo, ' ', ruta)
+    | extend clave = replace_string(replace_string(strcat(metodo, ' ', ruta), make_string(123), '<'), make_string(125), '>')
     | summarize Usos = count() by clave
-    | extend Funcion = case(${join(", ", [for k, v in local.nombres_funciones : "clave == '${k}', '${v}'"])}, clave)
+    | extend Funcion = case(${join(", ", [for k, v in local.nombres_funciones : "clave == '${replace(replace(k, "{", "<"), "}", ">")}', '${v}'"])}, clave)
     | summarize Usos = sum(Usos) by Funcion
     | top 10 by Usos
   KQL
