@@ -50,8 +50,37 @@ locals {
     | project Indicador = Column, Valor = todouble(Value)
   KQL
 
+  # Lo que hace el jugador (no las consultas GET ni las herramientas de admin /dev), con nombres para el gerente.
+  # Una ruta que no este aqui aparece tal cual (METODO /ruta) en vez de perderse.
+  nombres_funciones = {
+    "POST /api/partidas/{matchId}/jugadores/{userId}/movimiento"                             = "Moverse en el mapa"
+    "POST /api/partidas/{matchId}/jugadores/{userId}/objetos/{componenteMapaId}/recoleccion" = "Recoger un objeto"
+    "POST /api/partidas/{matchId}/acertijos/{componenteMapaId}/bloqueo"                      = "Abrir un acertijo"
+    "DELETE /api/partidas/{matchId}/acertijos/{componenteMapaId}/bloqueo"                    = "Cerrar un acertijo"
+    "POST /api/partidas/{matchId}/acertijos/{componenteMapaId}/solucion"                     = "Responder un acertijo"
+    "POST /api/partidas/{matchId}/acertijos/{componenteMapaId}/clicks"                       = "Tocar un acertijo"
+    "DELETE /api/partidas/{matchId}/acertijos/{componenteMapaId}/clicks"                     = "Reiniciar un acertijo"
+    "POST /api/partidas/{matchId}/reto/clicks"                                               = "Clics en el reto Heroe vs Verdugo"
+    "POST /api/chat/partidas/{matchId}"                                                      = "Chat de la partida"
+    "POST /api/chat/partidas/{matchId}/equipo"                                               = "Chat del equipo"
+    "POST /api/chat/salas/{salaId}"                                                          = "Chat de la sala de espera"
+    "POST /api/chat/global"                                                                  = "Chat del menu"
+    "POST /api/salas"                                                                        = "Crear una sala"
+    "PATCH /api/salas/{salaId}/configuracion"                                                = "Configurar la sala"
+    "POST /api/salas/{salaId}/jugadores"                                                     = "Entrar a una sala"
+    "DELETE /api/salas/{salaId}/jugadores/{userId}"                                          = "Salir de una sala"
+    "POST /api/equipos/{equipoId}/miembros"                                                  = "Elegir equipo"
+    "POST /api/salas/{salaId}/listo"                                                         = "Marcarse listo"
+    "DELETE /api/salas/{salaId}/listo"                                                       = "Quitar el listo"
+    "POST /api/perfil"                                                                       = "Elegir nombre de jugador"
+  }
   kql_negocio_mas_usadas = <<-KQL
-    ${local.kql_peticiones}| summarize Usos = count() by Funcion = strcat(tostring(j.http.metodo), ' ', tostring(j.http.ruta))
+    ${local.kql_peticiones}| extend metodo = tostring(j.http.metodo), ruta = tostring(j.http.ruta)
+    | where metodo != 'GET' and not(ruta startswith '/dev/')
+    | extend clave = strcat(metodo, ' ', ruta)
+    | summarize Usos = count() by clave
+    | extend Funcion = case(${join(", ", [for k, v in local.nombres_funciones : "clave == '${k}', '${v}'"])}, clave)
+    | summarize Usos = sum(Usos) by Funcion
     | top 10 by Usos
   KQL
 
@@ -196,7 +225,7 @@ locals {
     negocio_duracion         = { titulo = "Tiempo promedio de interaccion", query = local.kql_negocio_duracion, vista = "tiles", ancho = "100" }
     negocio_jugadores_tiempo = { titulo = "Jugadores activos en el tiempo", query = local.kql_negocio_jugadores_tiempo, vista = "timechart", ancho = "50" }
     negocio_partidas_tiempo  = { titulo = "Partidas y acertijos en el tiempo", query = local.kql_negocio_partidas_tiempo, vista = "timechart", ancho = "50" }
-    negocio_mas_usadas       = { titulo = "Funcionalidades mas usadas", query = local.kql_negocio_mas_usadas, vista = "barchart", ancho = "100" }
+    negocio_mas_usadas       = { titulo = "Funcionalidades mas usadas (acciones de los jugadores)", query = local.kql_negocio_mas_usadas, vista = "barchart", ancho = "100" }
     tecnico_resumen          = { titulo = "Resumen del sistema (tiempos en la puerta de entrada)", query = local.kql_tecnico_resumen, vista = "tiles", ancho = "100" }
     tecnico_replicas         = { titulo = "Estado por replica, ultimos 2 min (DEGRADADA: p95 > 300 ms o errores > 2 %; SIN SENAL: 90 s sin logs)", query = local.kql_tecnico_replicas, vista = "table", ancho = "100" }
     tecnico_p95_tiempo       = { titulo = "Tiempo de respuesta p95 por servicio (ms, cada 5 min)", query = local.kql_tecnico_p95_tiempo, vista = "timechart", ancho = "50" }
