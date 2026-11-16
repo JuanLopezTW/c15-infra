@@ -15,9 +15,11 @@ locals {
     | extend j = parse_json(Log_s)
     | extend evento = tostring(j.evento)
   KQL
-  # Peticiones de jugadores en todos los puntos (gateway incluido); /api/version es la comprobacion de salud
+  # Peticiones de jugadores en todos los puntos (gateway incluido). No cuentan /api/version (comprobacion de salud)
+  # ni /api/admin (el panel del admin consulta Log Analytics y tarda segundos: marcaria degradado a quien lo atiende)
   kql_peticiones_todas = <<-KQL
     ${local.kql_logs}| where evento == 'http.peticion' and tostring(j.http.ruta) != '/api/version'
+        and not(tostring(j.http.ruta) startswith '/api/admin')
   KQL
   # Solo en los servicios: cada peticion cuenta una vez (el gateway la registra tambien al pasarla)
   kql_peticiones = <<-KQL
@@ -139,6 +141,7 @@ locals {
         | summarize p95Ahora = round(percentile(ms, 95)), PctErroresAhora = round(100.0 * countif(estado >= 500) / count(), 2)
             by Servicio = ContainerAppName_s, Replica = ContainerGroupName_s;
     ${replace(local.kql_logs, "\n", " ")}
+    | where ContainerAppName_s !in ('c15-rabbitmq', 'c15-redis', 'c15-kafka')
     | summarize UltimaSenal = max(TimeGenerated), Excepciones = countif(tostring(j.log.level) == 'ERROR')
         by Servicio = ContainerAppName_s, Replica = ContainerGroupName_s, Revision = RevisionName_s
     | join kind=inner actuales on Servicio
